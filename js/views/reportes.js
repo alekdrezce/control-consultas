@@ -1,5 +1,5 @@
 // Vista "Reportes": mensual (con detalle por paciente) y anual; exportación a PDF y Excel
-import { nombreMes, resumenMes, pesos, sumarMeses, iso, MESES, ESTADOS, periodoDe, hoyISO } from '../calc.js';
+import { nombreMes, resumenMes, pesos, sumarMeses, iso, MESES, ESTADOS, periodoDe, hoyISO, semanaDe } from '../calc.js';
 import { state, sesionesDelMes, sesionesDelAnio, mesDe, paramDe, anioDe, guardarMes, pacientePorId } from '../db.js';
 import { esc, ICON, modal, toast, errorMsg, numero, cargarXLSX } from '../ui.js';
 
@@ -105,7 +105,7 @@ async function mensual(root, ctx, tabs) {
       XLSX.utils.book_append_sheet(wb, hoja(XLSX, det, [28, 10, 16, 14, 12]), 'Por paciente');
       const ses = [['Fecha', 'Hora', 'Paciente', 'Semana', 'Estado', 'Monto', 'Notas'],
         ...sesiones.slice().sort((a, b) => a.fecha.localeCompare(b.fecha) || (a.hora || '').localeCompare(b.hora || ''))
-          .map((s) => [s.fecha.split('-').reverse().join('/'), (s.hora || '').slice(0, 5), pacientePorId(s.paciente_id)?.nombre || '', `${s.semana}ª`,
+          .map((s) => [s.fecha.split('-').reverse().join('/'), (s.hora || '').slice(0, 5), pacientePorId(s.paciente_id)?.nombre || '', `${semanaDe(s.fecha_prevista)}ª`,
             ESTADOS[s.estado].corto, ESTADOS[s.estado].cobra ? Number(s.monto) : 0, s.notas || ''])];
       XLSX.utils.book_append_sheet(wb, hoja(XLSX, ses, [12, 8, 28, 8, 10, 10, 30]), 'Sesiones');
       XLSX.writeFile(wb, `Reporte ${nombreMes(periodo)}.xlsx`);

@@ -1,7 +1,7 @@
 // Acceso a datos (Supabase) + tiempo real
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_KEY, DEFAULT_MES } from './config.js';
-import { tarifaDe, parseISO, hoyISO, periodoDe } from './calc.js';
+import { tarifaDe, parseISO, hoyISO, periodoDe, sumarDias, vigente, tocaEn, horaCorta, proximoDia } from './calc.js';
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -10,6 +10,8 @@ export const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
 export const state = {
   user: null,
   pacientes: [],
+  agendas: [],
+  horarios: [],
   meses: new Map(),       // periodo -> fila
   parametros: new Map(),  // anio -> fila
   miembros: [],
@@ -23,13 +25,17 @@ async function q(promise) {
 
 // ---------- Carga base ----------
 export async function cargarBase() {
-  const [pac, meses, params, miembros] = await Promise.all([
+  const [pac, ags, hors, meses, params, miembros] = await Promise.all([
     q(sb.from('pacientes').select('*').order('nombre')),
+    q(sb.from('agendas').select('*').order('desde')),
+    q(sb.from('horarios').select('*').order('hora')),
     q(sb.from('meses').select('*')),
     q(sb.from('parametros').select('*')),
     q(sb.from('miembros').select('*').order('created_at')),
   ]);
   state.pacientes = pac;
+  state.agendas = ags;
+  state.horarios = hors.sort((a, b) => a.dia_semana - b.dia_semana || a.hora.localeCompare(b.hora));
   state.meses = new Map(meses.map((m) => [m.periodo, m]));
   state.parametros = new Map(params.map((p) => [p.anio, p]));
   state.miembros = miembros;
@@ -41,6 +47,34 @@ export function esMiembro() {
 }
 
 export const pacientePorId = (id) => state.pacientes.find((p) => p.id === id);
+
+// ---------- Consultas sobre agendas ----------
+export const agendasDe = (pid) => state.agendas.filter((a) => a.paciente_id === pid).sort((a, b) => a.desde.localeCompare(b.desde));
+/** Agenda vigente hoy, o la próxima que empieza */
+export function agendaActual(pid, fecha = hoyISO()) {
+  const ags = agendasDe(pid);
+  return ags.find((a) => vigente(a, fecha)) || ags.find((a) => a.desde > fecha) || null;
+}
+/** Próxima consulta prevista del paciente desde una fecha: { fecha, agenda } o null */
+export function proximaConsulta(pid, desde = hoyISO()) {
+  let mejor = null;
+  for (const a of agendasDe(pid)) {
+    const base = a.desde > desde ? a.desde : desde;
+    const f = proximoDia(base, a.dia_semana);
+    if (vigente(a, f) && (!mejor || f < mejor.fecha)) mejor = { fecha: f, agenda: a };
+  }
+  return mejor;
+}
+export function estaAgendado(pid, fecha = hoyISO()) { return !!agendaActual(pid, fecha); }
+/** Paciente que ocupa ese día/hora en esa fecha (o en adelante) */
+export function ocupante(dia, hora, fecha = hoyISO(), exceptoPid = null) {
+  const h = horaCorta(hora);
+  const a = state.agendas.find((x) => x.dia_semana === dia && horaCorta(x.hora) === h && x.paciente_id !== exceptoPid
+    && (!x.hasta || x.hasta >= fecha));
+  return a ? pacientePorId(a.paciente_id) : null;
+}
+/** Agenda que prevé una consulta del paciente en esa fecha */
+export const agendaQueToca = (pid, fecha) => state.agendas.find((a) => a.paciente_id === pid && tocaEn(a, fecha));
 
 // ---------- Meses ----------
 /** Parámetros del mes; si no existe, hereda del último mes anterior cargado. */
@@ -67,12 +101,10 @@ export async function guardarMes(periodo, datos) {
   const anterior = mesDe(periodo);
   const fila = (await q(sb.from('meses').upsert({ periodo, ...datos }, { onConflict: 'periodo' }).select()))[0];
   state.meses.set(periodo, fila);
-  // Si cambió la tarifa general, actualizar las sesiones del mes de pacientes sin tarifa propia
   if (Number(anterior.tarifa_general) !== Number(fila.tarifa_general)) {
     const ids = state.pacientes.filter((p) => p.tarifa == null).map((p) => p.id);
     if (ids.length) {
-      await q(sb.from('sesiones').update({ monto: fila.tarifa_general })
-        .eq('periodo', periodo).in('paciente_id', ids));
+      await q(sb.from('sesiones').update({ monto: fila.tarifa_general }).eq('periodo', periodo).in('paciente_id', ids));
     }
   }
   return fila;
@@ -92,7 +124,7 @@ export async function guardarParametros(anio, iva, irpf) {
   return fila;
 }
 
-// ---------- Pacientes ----------
+// ---------- Pacientes (ficha) ----------
 export async function guardarPaciente(datos) {
   const previo = datos.id ? pacientePorId(datos.id) : null;
   let fila;
@@ -120,6 +152,93 @@ export async function guardarPaciente(datos) {
 export async function borrarPaciente(id) {
   await q(sb.from('pacientes').delete().eq('id', id));
   state.pacientes = state.pacientes.filter((p) => p.id !== id);
+  state.agendas = state.agendas.filter((a) => a.paciente_id !== id);
+}
+
+// ---------- Agendas ----------
+/**
+ * Corta las agendas del paciente para que no tengan consultas desde `fecha` en adelante
+ * y borra las sesiones ya marcadas desde esa fecha (salvo `conservar`).
+ */
+async function cortarDesde(pid, fecha, { conservar = null } = {}) {
+  const antes = sumarDias(fecha, -1);
+  for (const a of agendasDe(pid)) {
+    if (a.desde >= fecha) {
+      await q(sb.from('agendas').delete().eq('id', a.id));
+    } else if (!a.hasta || a.hasta >= fecha) {
+      await q(sb.from('agendas').update({ hasta: antes }).eq('id', a.id));
+    }
+  }
+  let borrar = sb.from('sesiones').delete().eq('paciente_id', pid).gte('fecha_prevista', fecha);
+  if (conservar) borrar = borrar.neq('fecha_prevista', conservar);
+  await q(borrar);
+}
+
+/** Cuántas sesiones ya marcadas se perderían al cortar desde esa fecha */
+export async function sesionesDesde(pid, fecha) {
+  return q(sb.from('sesiones').select('id, fecha_prevista, estado').eq('paciente_id', pid).gte('fecha_prevista', fecha));
+}
+
+/** Agenda al paciente en un día y hora desde una fecha (reemplaza lo que hubiera desde esa fecha). */
+export async function agendar(pid, { dia_semana, hora, desde, hasta = null }) {
+  await cortarDesde(pid, desde);
+  await q(sb.from('agendas').insert({ paciente_id: pid, dia_semana, hora, desde, hasta }));
+  await cargarBase();
+}
+
+/**
+ * Cancela todas las consultas del paciente desde `fecha`.
+ * - reanudar: fecha opcional en la que vuelve con el mismo día y hora.
+ * - registrarCancelada: deja esa primera consulta registrada como "Canceló con aviso".
+ */
+export async function cancelarDesde(pid, fecha, { reanudar = null, registrarCancelada = false } = {}) {
+  const a = agendaQueToca(pid, fecha) || agendaActual(pid, fecha);
+  const p = pacientePorId(pid);
+  if (registrarCancelada && a) {
+    await asegurarMes(periodoDe(fecha));
+    await q(sb.from('sesiones').upsert({
+      paciente_id: pid, fecha_prevista: fecha, periodo: periodoDe(fecha), fecha, hora: a.hora,
+      estado: 'cancelada_con_aviso', monto: tarifaDe(p, mesDe(periodoDe(fecha))),
+    }, { onConflict: 'paciente_id,fecha_prevista' }));
+  }
+  await cortarDesde(pid, fecha, { conservar: registrarCancelada ? fecha : null });
+  if (reanudar && a) {
+    await q(sb.from('agendas').insert({ paciente_id: pid, dia_semana: a.dia_semana, hora: a.hora, desde: reanudar, hasta: a.hasta && a.hasta >= reanudar ? a.hasta : null }));
+  }
+  await cargarBase();
+}
+
+export async function borrarAgenda(id) {
+  await q(sb.from('agendas').delete().eq('id', id));
+  state.agendas = state.agendas.filter((a) => a.id !== id);
+}
+
+// ---------- Horarios del consultorio ----------
+export async function agregarHorario(dia_semana, hora) {
+  await q(sb.from('horarios').insert({ dia_semana, hora }));
+  await cargarBase();
+}
+export async function borrarHorario(id) {
+  await q(sb.from('horarios').delete().eq('id', id));
+  await cargarBase();
+}
+/**
+ * Cambia un horario fijo. Si `moverPacientes`, los pacientes agendados en el horario viejo
+ * pasan al nuevo desde la fecha indicada.
+ */
+export async function cambiarHorario(h, { dia_semana, hora, desde, moverPacientes }) {
+  const viejoHora = horaCorta(h.hora);
+  if (moverPacientes) {
+    const afectados = state.agendas.filter((a) => a.dia_semana === h.dia_semana && horaCorta(a.hora) === viejoHora && (!a.hasta || a.hasta >= desde));
+    for (const a of afectados) {
+      const inicio = a.desde > desde ? a.desde : desde;
+      await agendar(a.paciente_id, { dia_semana, hora, desde: inicio, hasta: a.hasta });
+    }
+  }
+  const existe = state.horarios.find((x) => x.dia_semana === dia_semana && horaCorta(x.hora) === horaCorta(hora) && x.id !== h.id);
+  if (existe) await q(sb.from('horarios').delete().eq('id', h.id));
+  else await q(sb.from('horarios').update({ dia_semana, hora }).eq('id', h.id));
+  await cargarBase();
 }
 
 // ---------- Sesiones ----------
@@ -131,18 +250,17 @@ export async function sesionesDelAnio(anio) {
   return q(sb.from('sesiones').select('*').gte('periodo', `${anio}-01-01`).lte('periodo', `${anio}-12-01`));
 }
 
-/** Sesiones que pueden caer en una semana: las de los meses que toca + las movidas a esas fechas */
+/** Sesiones previstas en la semana o movidas a días de la semana */
 export async function sesionesDeSemana(desde, hasta) {
-  const periodos = [...new Set([periodoDe(desde), periodoDe(hasta)])].join(',');
   return q(sb.from('sesiones').select('*')
-    .or(`periodo.in.(${periodos}),and(fecha.gte.${desde},fecha.lte.${hasta})`));
+    .or(`and(fecha_prevista.gte.${desde},fecha_prevista.lte.${hasta}),and(fecha.gte.${desde},fecha.lte.${hasta})`));
 }
 
 export async function guardarSesion(s) {
-  await asegurarMes(s.periodo);
-  const fila = (await q(sb.from('sesiones')
-    .upsert(s, { onConflict: 'paciente_id,periodo,semana' }).select()))[0];
-  return fila;
+  const periodo = periodoDe(s.fecha_prevista);
+  await asegurarMes(periodo);
+  return (await q(sb.from('sesiones')
+    .upsert({ ...s, periodo }, { onConflict: 'paciente_id,fecha_prevista' }).select()))[0];
 }
 
 export async function borrarSesion(id) {

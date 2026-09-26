@@ -45,10 +45,16 @@ export function fechaCorta(fecha) {
 }
 export function horaCorta(h) { return h ? h.slice(0, 5) : ''; }
 
-/** ¿El paciente está activo en algún día del período [desde, hasta]? */
-export function activoEntre(p, desde, hasta) {
-  return p.fecha_alta <= hasta && (!p.fecha_baja || p.fecha_baja >= desde);
-}
+// ---------- Agendas (día/hora de un paciente con vigencia desde/hasta) ----------
+/** ¿La agenda está vigente en esa fecha? (sin mirar el día de la semana) */
+export function vigente(a, fecha) { return a.desde <= fecha && (!a.hasta || a.hasta >= fecha); }
+/** ¿Esa fecha es una consulta prevista por la agenda? */
+export function tocaEn(a, fecha) { return a.dia_semana === diaSemana(fecha) && vigente(a, fecha); }
+/** ¿La agenda se superpone con el rango [desde, hasta]? */
+export function seSuperpone(a, desde, hasta) { return a.desde <= hasta && (!a.hasta || a.hasta >= desde); }
+/** Próxima fecha (>= desde) que cae en ese día de la semana */
+export function proximoDia(desde, dia) { return sumarDias(desde, (dia - diaSemana(desde) + 7) % 7); }
+export function fechaLarga(fecha) { const { y, m, d } = parseISO(fecha); return `${DIAS[diaSemana(fecha) - 1]} ${d}/${m}/${y}`; }
 
 // ---------- Dinero ----------
 export function tarifaDe(paciente, mes) {

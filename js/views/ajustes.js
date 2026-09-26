@@ -1,7 +1,8 @@
-// Vista "Ajustes": cuenta, personas con acceso, parámetros impositivos por año
+// Vista "Ajustes": horarios fijos, cuenta, personas con acceso, parámetros impositivos por año
 import { pesos, calcularIRPF } from '../calc.js';
 import { state, sb, paramDe, guardarParametros, agregarMiembro, quitarMiembro, anioDe } from '../db.js';
 import { esc, ICON, toast, errorMsg, confirmar, numero } from '../ui.js';
+import { htmlHorarios, enlazarHorarios } from '../horarios.js';
 
 let anioSel = null;
 
@@ -15,6 +16,7 @@ export async function render(root, ctx) {
   root.innerHTML = `
     <header class="vista-cab"><div class="nav-periodo"><h1>Ajustes</h1></div></header>
     <div class="reporte">
+      ${htmlHorarios()}
       <section class="tarjeta">
         <h2>Tu cuenta</h2>
         <p>${esc(state.user?.email)}</p>
@@ -38,7 +40,7 @@ export async function render(root, ctx) {
         <p class="ayuda">Además de estar en esta lista, la persona necesita una cuenta creada en Supabase (Authentication → Users → Add user) con ese mismo email.</p>
       </section>
 
-      <section class="tarjeta">
+      <section class="tarjeta tarjeta-ancha">
         <div class="tarjeta-cab">
           <h2>Impuestos del año</h2>
           <select data-anio aria-label="Año">
@@ -86,6 +88,7 @@ export async function render(root, ctx) {
   // Evitar que un cambio en tiempo real borre lo que se está escribiendo
   root.querySelectorAll('input, select, textarea').forEach((i) => i.addEventListener('input', () => { ctx.editando = true; }));
 
+  enlazarHorarios(root, ctx);
   root.querySelector('[data-salir]').addEventListener('click', async () => { await sb.auth.signOut(); });
   root.querySelector('[data-clave]').addEventListener('click', () => ctx.cambiarClave());
 

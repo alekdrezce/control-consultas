@@ -287,7 +287,7 @@ main {
   .reporte > .tarjeta:nth-child(3), .reporte > .acciones, .reporte > .pie-impresion { grid-column: 1 / -1; }
   [data-vista="ajustes"] .reporte { grid-template-columns: 1fr 1fr; }
   [data-vista="ajustes"] .reporte > .tarjeta:first-child { grid-row: auto; }
-  [data-vista="ajustes"] .reporte > .tarjeta:nth-child(3) { grid-column: 1 / -1; }
+  [data-vista="ajustes"] .reporte > .tarjeta-ancha { grid-column: 1 / -1; }
 }
 
 /* Gráfico anual */
@@ -464,3 +464,53 @@ button, a { -webkit-tap-highlight-color: transparent; }
 @media (hover: hover) {
   .g-celda:not([class*="est-"]):hover, .pac-item:hover { background: var(--surface-2); }
 }
+
+/* ---------- Horarios fijos ---------- */
+.horarios { display: flex; flex-direction: column; gap: 10px; }
+.h-dia { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: start; }
+.h-nombre { font-weight: 700; padding-top: 10px; }
+.h-lista { display: flex; flex-wrap: wrap; gap: 6px; }
+.h-chip {
+  display: flex; flex-direction: column; align-items: flex-start; min-width: 88px; max-width: 150px;
+  padding: 6px 10px; border-radius: 10px; border: 1px dashed var(--accent); background: var(--surface); text-align: left;
+}
+.h-chip b { font-variant-numeric: tabular-nums; }
+.h-chip small { color: var(--ink-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.h-chip.ocupado { border: 1px solid transparent; background: var(--brand-soft); }
+.h-chip.ocupado small { color: var(--ink-2); }
+@media (max-width: 480px) { .h-dia { grid-template-columns: 1fr; gap: 4px; } .h-nombre { padding-top: 0; } }
+.dias-check { display: flex; flex-wrap: wrap; gap: 6px; }
+.check-dia { flex-direction: row; }
+.check-dia input { position: absolute; opacity: 0; pointer-events: none; }
+.check-dia span { display: inline-grid; place-items: center; min-width: 48px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; color: var(--ink-2); }
+.check-dia input:checked + span { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.check-dia input:focus-visible + span { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* ---------- Agendar / fichas ---------- */
+.separador { height: 1px; background: var(--line); margin: 16px 0; }
+.subtitulo { font-size: 15px; margin: 0 0 8px; }
+.sugerencias { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
+.sug { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent); background: var(--surface-2); text-align: left; }
+.sug small { color: var(--ink-3); white-space: nowrap; }
+.elegido { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); }
+.elegido small { color: var(--ink-2); }
+.agenda-actual { display: flex; flex-direction: column; padding: 12px; border-radius: 10px; background: var(--brand-soft); margin: 0 0 10px; }
+.agenda-actual b { font-size: 17px; }
+.agenda-actual span { color: var(--ink-2); font-size: 14px; }
+.acciones-ficha { margin-top: 0; }
+.historial { margin-top: 12px; font-size: 14px; }
+.historial summary { cursor: pointer; color: var(--brand); font-weight: 600; }
+.historial ul { margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); }
+.historial li.vigente { color: var(--ink); }
+.pac-inactivo .pac-nombre { color: var(--ink-2); }
+.opciones { display: flex; flex-direction: column; gap: 8px; }
+.radio, .check { flex-direction: row; align-items: flex-start; gap: 10px; font-weight: 500; color: var(--ink); font-size: 15px; }
+.radio small { display: block; color: var(--ink-3); font-size: 13px; font-weight: 400; }
+.radio input, .check input { width: 20px; height: 20px; min-height: 0; margin: 1px 0 0; accent-color: var(--brand); flex: none; }
+.turno-libre { grid-template-columns: 48px minmax(0, 1fr) auto; background: repeating-linear-gradient(135deg, transparent 0 8px, var(--surface-2) 8px 9px); }
+.turno-libre .t-nombre { color: var(--ink-3); font-weight: 500; font-style: italic; }
+.turno-libre .btn { min-height: 34px; }
+@media (max-width: 420px) { .turno-libre { grid-template-columns: 44px minmax(0, 1fr) auto; } }
+.bienvenida { max-width: 460px; margin: 20px auto; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); color: var(--ink-2); }
+.bienvenida h2 { color: var(--ink); margin-bottom: 10px; }
+.bienvenida p { margin: 6px 0; }

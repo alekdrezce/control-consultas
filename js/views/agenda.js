@@ -1,50 +1,66 @@
-// Vista "Agenda": consultas de la semana ordenadas por día y hora
-import { DIAS, MESES, sumarDias, periodoDe, semanaDe, parseISO, horaCorta, activoEntre, fechaCorta, hoyISO, lunesDe, ESTADOS } from '../calc.js';
+// Vista "Agenda": consultas de la semana ordenadas por día y hora, con los horarios libres
+import { DIAS, MESES, sumarDias, parseISO, horaCorta, fechaCorta, hoyISO, lunesDe, ESTADOS, diaSemana, tocaEn } from '../calc.js';
 import { state, sesionesDeSemana, pacientePorId } from '../db.js';
 import { esc, ICON, toast } from '../ui.js';
 import { abrirSesion, alternarEstado } from '../sesion.js';
+import { abrirAgendar } from '../agendar.js';
 
 export async function render(root, ctx) {
   const lunes = ctx.lunes;
   const domingo = sumarDias(lunes, 6);
   const hoy = hoyISO();
+  const enSemana = (f) => f >= lunes && f <= domingo;
   const sesiones = await sesionesDeSemana(lunes, domingo);
-  const porClave = new Map(sesiones.map((s) => [`${s.paciente_id}|${s.periodo}|${s.semana}`, s]));
+  const porClave = new Map(sesiones.map((s) => [`${s.paciente_id}|${s.fecha_prevista}`, s]));
   const usadas = new Set();
   const items = [];
 
   for (let i = 0; i < 7; i++) {
     const fecha = sumarDias(lunes, i);
-    const periodo = periodoDe(fecha);
-    const semana = semanaDe(fecha);
-    for (const p of state.pacientes) {
-      if (p.dia_semana !== i + 1) continue;
-      const s = porClave.get(`${p.id}|${periodo}|${semana}`);
-      if (!s && !activoEntre(p, fecha, fecha)) continue;
+    for (const a of state.agendas) {
+      if (!tocaEn(a, fecha)) continue;
+      const p = pacientePorId(a.paciente_id);
+      if (!p) continue;
+      const s = porClave.get(`${p.id}|${fecha}`);
       if (s) usadas.add(s.id);
-      const dentro = s && s.fecha >= lunes && s.fecha <= domingo;
+      const dentro = s && enSemana(s.fecha);
       items.push({
-        p, s, periodo, semana,
+        p, s, fechaPrev: fecha, horaPrev: a.hora,
         fecha: dentro ? s.fecha : fecha,
-        hora: (dentro && s.hora) || p.hora,
+        hora: (s?.hora) || a.hora,
         movidaA: s && !dentro ? s.fecha : null,
         movidaDe: dentro && s.fecha !== fecha ? fecha : null,
       });
     }
   }
-  // Sesiones reprogramadas hacia esta semana desde otra
+  // Sesiones fuera de la agenda actual (reprogramadas o de agendas ya terminadas)
   for (const s of sesiones) {
-    if (usadas.has(s.id) || s.fecha < lunes || s.fecha > domingo) continue;
+    if (usadas.has(s.id)) continue;
     const p = pacientePorId(s.paciente_id);
     if (!p) continue;
-    items.push({ p, s, periodo: s.periodo, semana: s.semana, fecha: s.fecha, hora: s.hora || p.hora, movidaDe: 'otra semana' });
+    if (enSemana(s.fecha)) {
+      items.push({ p, s, fechaPrev: s.fecha_prevista, horaPrev: s.hora, fecha: s.fecha, hora: s.hora, movidaDe: s.fecha !== s.fecha_prevista ? s.fecha_prevista : null });
+    } else if (enSemana(s.fecha_prevista)) {
+      items.push({ p, s, fechaPrev: s.fecha_prevista, horaPrev: s.hora, fecha: s.fecha_prevista, hora: s.hora, movidaA: s.fecha });
+    }
+  }
+  // Horarios libres (de hoy en adelante)
+  for (let i = 0; i < 7; i++) {
+    const fecha = sumarDias(lunes, i);
+    if (fecha < hoy) continue;
+    const ocupadas = new Set(items.filter((it) => it.fechaPrev === fecha && !it.movidaA).map((it) => horaCorta(it.horaPrev)));
+    for (const h of state.horarios) {
+      if (h.dia_semana !== diaSemana(fecha) || ocupadas.has(horaCorta(h.hora))) continue;
+      items.push({ libre: true, fecha, hora: h.hora, dia: h.dia_semana });
+    }
   }
 
-  const orden = (a, b) => a.fecha.localeCompare(b.fecha) || (a.hora || '99').localeCompare(b.hora || '99') || a.p.nombre.localeCompare(b.p.nombre);
+  const orden = (a, b) => a.fecha.localeCompare(b.fecha) || (a.hora || '99').localeCompare(b.hora || '99') || (a.libre ? 1 : 0) - (b.libre ? 1 : 0) || (a.p?.nombre || '').localeCompare(b.p?.nombre || '');
   items.sort(orden);
+  const consultas = items.filter((it) => !it.libre && !it.movidaA);
+  const pendientes = consultas.filter((it) => !it.s && it.fecha <= hoy).length;
+  const libres = items.filter((it) => it.libre).length;
 
-  const pendientes = items.filter((it) => !it.s && !it.movidaA && it.fecha <= hoy).length;
-  const marcadas = items.filter((it) => it.s && !it.movidaA).length;
   const a = parseISO(lunes), b = parseISO(domingo);
   const titulo = a.m === b.m ? `${a.d} al ${b.d} de ${MESES[a.m - 1].toLowerCase()}` : `${a.d} ${MESES[a.m - 1].slice(0, 3).toLowerCase()} al ${b.d} ${MESES[b.m - 1].slice(0, 3).toLowerCase()}`;
 
@@ -57,30 +73,52 @@ export async function render(root, ctx) {
         ${lunes !== lunesDe(hoy) ? '<button class="btn btn-chico" data-hoy>Hoy</button>' : ''}
       </div>
       <div class="chips">
-        <span class="chip"><b>${items.filter((it) => !it.movidaA).length}</b> consultas</span>
-        <span class="chip"><b>${marcadas}</b> marcadas</span>
+        <span class="chip"><b>${consultas.length}</b> consultas</span>
+        <span class="chip"><b>${consultas.filter((it) => it.s).length}</b> marcadas</span>
         ${pendientes ? `<span class="chip chip-alerta"><b>${pendientes}</b> sin marcar</span>` : ''}
+        ${libres ? `<span class="chip chip-fuerte"><b>${libres}</b> horario${libres > 1 ? 's' : ''} libre${libres > 1 ? 's' : ''}</span>` : ''}
       </div>
-    </header>
-    <div class="agenda">`;
+    </header>`;
 
+  if (!state.pacientes.length && !state.horarios.length) {
+    html += `<div class="vacio bienvenida">
+      <h2>Empecemos</h2>
+      <p>1. Cargá los horarios fijos del consultorio en <b>Ajustes</b>.</p>
+      <p>2. Creá cada paciente y agendalo en un horario.</p>
+      <div class="acciones acciones-export"><a class="btn" href="#/ajustes">Ir a Ajustes</a><a class="btn btn-primario" href="#/pacientes">Crear paciente</a></div>
+    </div>`;
+    root.innerHTML = html;
+    return;
+  }
+
+  html += '<div class="agenda">';
   for (let i = 0; i < 7; i++) {
     const fecha = sumarDias(lunes, i);
     const delDia = items.filter((it) => it.fecha === fecha);
     const esHoy = fecha === hoy;
+    const { d, m } = parseISO(fecha);
     if (!delDia.length) {
-      html += `<section class="dia dia-vacio ${esHoy ? 'es-hoy' : ''}"><h2>${DIAS[i]} <span>${parseISO(fecha).d}/${parseISO(fecha).m}</span></h2><p>Sin consultas</p></section>`;
+      html += `<section class="dia dia-vacio ${esHoy ? 'es-hoy' : ''}"><h2>${DIAS[i]} <span>${d}/${m}</span></h2><p>Sin consultas</p></section>`;
       continue;
     }
+    const n = delDia.filter((x) => !x.libre && !x.movidaA).length;
     html += `<section class="dia ${esHoy ? 'es-hoy' : ''}">
-      <h2>${DIAS[i]} <span>${parseISO(fecha).d}/${parseISO(fecha).m}</span>${esHoy ? '<em>Hoy</em>' : ''}<small>${delDia.filter((x) => !x.movidaA).length}</small></h2>
+      <h2>${DIAS[i]} <span>${d}/${m}</span>${esHoy ? '<em>Hoy</em>' : ''}<small>${n}</small></h2>
       <ul>`;
-    delDia.forEach((it) => {
+    for (const it of delDia) {
       const idx = items.indexOf(it);
+      if (it.libre) {
+        html += `<li class="turno turno-libre">
+          <span class="t-hora">${horaCorta(it.hora)}</span>
+          <span class="t-nombre">Libre</span>
+          <button class="btn btn-chico" data-agendar="${idx}">${ICON.mas}<span>Agendar</span></button>
+        </li>`;
+        continue;
+      }
       const est = it.s?.estado;
       const nota = it.movidaA ? `Reprogramada → ${fechaCorta(it.movidaA)}`
-        : it.movidaDe ? `Reprogramada${it.movidaDe !== 'otra semana' ? ' (era ' + fechaCorta(it.movidaDe) + ')' : ''}` : '';
-      html += `<li class="turno ${it.movidaA ? 'turno-movido' : ''} ${est ? 'con-' + est : ''}">
+        : it.movidaDe ? `Reprogramada (era ${fechaCorta(it.movidaDe)})` : '';
+      html += `<li class="turno ${it.movidaA ? 'turno-movido' : ''}">
         <span class="t-hora">${it.hora ? horaCorta(it.hora) : '—'}</span>
         <span class="t-nombre">${esc(it.p.nombre)}${nota ? `<small>${nota}</small>` : ''}${it.s?.notas ? `<small class="t-nota">${esc(it.s.notas)}</small>` : ''}</span>
         ${it.movidaA ? '' : `<span class="t-acciones" role="group" aria-label="Estado de ${esc(it.p.nombre)}">
@@ -88,16 +126,12 @@ export async function render(root, ctx) {
         </span>`}
         <button class="btn-icono t-mas" data-i="${idx}" data-detalle aria-label="Más opciones">${ICON.puntos}</button>
       </li>`;
-    });
+    }
     html += '</ul></section>';
   }
   html += '</div>';
-  if (!items.length && !state.pacientes.length) {
-    html += `<div class="vacio"><p>Todavía no hay pacientes cargados.</p><a class="btn btn-primario" href="#/pacientes">Agregar pacientes</a></div>`;
-  }
   root.innerHTML = html;
 
-  // Al entrar a la agenda en el teléfono, llevar a "hoy"
   if (!ctx.agendaPosicionada) {
     ctx.agendaPosicionada = true;
     const hoyEl = root.querySelector('.dia.es-hoy');
@@ -109,11 +143,17 @@ export async function render(root, ctx) {
   root.querySelector('[data-hoy]')?.addEventListener('click', () => ctx.irSemana(lunesDe(hoy)));
 
   root.querySelector('.agenda').addEventListener('click', async (e) => {
+    const ag = e.target.closest('[data-agendar]');
+    if (ag) {
+      const it = items[Number(ag.dataset.agendar)];
+      abrirAgendar({ dia: it.dia, hora: it.hora, desde: it.fecha, onCambio: () => ctx.refrescar() });
+      return;
+    }
     const btn = e.target.closest('[data-i]');
     if (!btn) return;
     const it = items[Number(btn.dataset.i)];
     if (btn.hasAttribute('data-detalle')) {
-      abrirSesion({ paciente: it.p, periodo: it.periodo, semana: it.semana, sesion: it.s, onCambio: () => ctx.refrescar() });
+      abrirSesion({ paciente: it.p, fechaPrevista: it.fechaPrev, hora: it.horaPrev, sesion: it.s, onCambio: () => ctx.refrescar() });
       return;
     }
     const estado = btn.dataset.estado;
@@ -121,7 +161,7 @@ export async function render(root, ctx) {
     const quitando = it.s?.estado === estado;
     grupo.forEach((x) => { x.classList.toggle('sel', !quitando && x === btn); x.disabled = true; });
     try {
-      it.s = await alternarEstado(it.p, it.periodo, it.semana, estado, it.s);
+      it.s = await alternarEstado(it.p, it.fechaPrev, it.horaPrev, estado, it.s);
       toast(quitando ? 'Marca quitada' : `${it.p.nombre}: ${ESTADOS[estado].corto.toLowerCase()}`);
       ctx.refrescar();
     } catch { ctx.refrescar(); }

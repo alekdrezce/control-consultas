@@ -10,16 +10,23 @@ Aplicación web para registrar las consultas semanales de cada paciente y genera
 
 | Sección | Para qué sirve |
 |---|---|
-| **Agenda** | Consultas de la semana ordenadas por día y hora. Se marca cada sesión como Asistió, Faltó (sin aviso, se cobra) o Canceló (con aviso, no se cobra). Con "⋯" se reprograma a otro día u hora. |
-| **Mes** | Grilla por paciente y semana, igual que la planilla original. Al tocar una casilla vacía se marca la asistencia; al tocar una casilla marcada se abre el detalle para cambiarla. |
-| **Pacientes** | Alta y edición de pacientes con día y hora habitual, tarifa propia (opcional), fecha de alta y fecha de baja. |
-| **Reportes** | Reporte mensual con bruto, egresos, neto y detalle por paciente, y reporte anual mes a mes. Ambos se pueden descargar en PDF o Excel. |
-| **Ajustes** | Personas con acceso y parámetros de IVA e IRPF de cada año. |
+| **Agenda** | Consultas de la semana por día y hora, más los horarios libres (con botón **Agendar**). Se marca cada consulta como Asistió, Faltó (sin aviso, se cobra) o Canceló (con aviso, no se cobra). Con "⋯" se reprograma o se cancela desde ahí en adelante. |
+| **Mes** | Grilla paciente × semana, como la planilla original. Tocar una casilla vacía marca asistencia. |
+| **Pacientes** | Fichas permanentes. **Agendados**: con horario vigente o futuro. **Sin agenda**: pacientes que dejaron de venir, recordados con su historial y tarifa, listos para **Reagendar**. |
+| **Reportes** | Mensual (bruto, egresos, neto, detalle por paciente) y anual, en PDF o Excel. |
+| **Ajustes** | Horarios fijos del consultorio, personas con acceso y parámetros de IVA e IRPF por año. |
+
+## Cómo se organiza
+
+- **Horarios fijos:** se cargan en Ajustes por día (se pueden generar varios juntos, por ejemplo de 9:00 a 12:00 cada 60 minutos). Al cambiar un horario se puede mover al paciente que lo ocupa desde una fecha.
+- **Agendar:** paciente + día + horario + desde qué fecha. Si el nombre ya existe, se sugiere el paciente guardado para no duplicarlo, con su último horario.
+- **Cancelar desde una consulta:** desde cualquier consulta (la de hoy o una futura) o desde la ficha. Se elige si deja de venir o si vuelve en una fecha, y si esa primera consulta queda registrada como "Canceló con aviso".
+- **Historial:** cada cambio de horario queda guardado con sus fechas, así los meses anteriores no cambian.
 
 ## Puesta en marcha (una sola vez)
 
-1. **Crear las tablas:** en Supabase, abrí **SQL Editor → New query**, pegá el contenido de `supabase/schema.sql` y tocá **Run**.
-2. **Cargar los datos iniciales:** en una query nueva, pegá `datos-iniciales.sql` y tocá **Run**. Ese archivo no está en el repositorio porque contiene nombres de pacientes.
+1. **Crear las tablas:** en Supabase, abrí **SQL Editor → New query**, pegá el contenido de `supabase/schema.sql` y tocá **Run**. Si ya habías corrido una versión anterior, corré antes `supabase/reiniciar.sql` (borra todo).
+2. **Cargar las personas con acceso:** en una query nueva, pegá `datos-iniciales.sql` y tocá **Run**. Ese archivo no está en el repositorio porque contiene los emails. La base arranca vacía: los pacientes se crean desde la app.
 3. **Crear las cuentas:** en **Authentication → Users → Add user → Create new user**, creá una cuenta para cada email con una contraseña y marcá **Auto Confirm User**.
 4. **Cerrar el registro público:** en **Authentication → Sign In / Providers**, desactivá **Allow new users to sign up**.
 5. **Configurar las URLs:** en **Authentication → URL Configuration**, poné como **Site URL** la dirección del sitio (`https://alekdrezce.github.io/control-consultas/`) y agregala también en **Redirect URLs**. Esto hace falta para que funcione "Olvidé mi contraseña".

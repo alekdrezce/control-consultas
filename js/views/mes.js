@@ -1,6 +1,6 @@
 // Vista "Mes": grilla paciente × semana, como la planilla original
-import { DIAS, nombreMes, finDeMes, fechaSemana, parseISO, horaCorta, activoEntre, resumenMes, pesos, hoyISO, periodoDe, sumarMeses, ESTADOS } from '../calc.js';
-import { state, sesionesDelMes, mesDe, paramDe, anioDe } from '../db.js';
+import { DIAS, nombreMes, finDeMes, fechaSemana, parseISO, horaCorta, resumenMes, pesos, hoyISO, periodoDe, sumarMeses, ESTADOS, diaSemana, tocaEn, seSuperpone } from '../calc.js';
+import { state, sesionesDelMes, mesDe, paramDe, anioDe, pacientePorId } from '../db.js';
 import { esc, ICON, toast } from '../ui.js';
 import { abrirSesion, alternarEstado, reprogramada } from '../sesion.js';
 
@@ -8,15 +8,29 @@ const MARCA = { asistio: '✓', falta_sin_aviso: 'F', cancelada_con_aviso: 'C' }
 
 export async function render(root, ctx) {
   const periodo = ctx.periodo;
-  const sesiones = await sesionesDelMes(periodo);
-  const porClave = new Map(sesiones.map((s) => [`${s.paciente_id}|${s.semana}`, s]));
-  const conSesion = new Set(sesiones.map((s) => s.paciente_id));
   const fin = finDeMes(periodo);
   const hoy = hoyISO();
+  const sesiones = await sesionesDelMes(periodo);
+  const porClave = new Map(sesiones.map((s) => [`${s.paciente_id}|${s.fecha_prevista}`, s]));
 
-  const pacientes = state.pacientes
-    .filter((p) => activoEntre(p, periodo, fin) || conSesion.has(p.id))
-    .sort((a, b) => a.dia_semana - b.dia_semana || (a.hora || '99').localeCompare(b.hora || '99') || a.nombre.localeCompare(b.nombre));
+  // Filas: una por paciente y día de la semana (según sus agendas del mes y sus sesiones)
+  const filas = new Map();
+  const fila = (pid, dia) => {
+    const k = `${pid}|${dia}`;
+    if (!filas.has(k)) filas.set(k, { p: pacientePorId(pid), dia, agendas: [], horas: new Set() });
+    return filas.get(k);
+  };
+  for (const a of state.agendas) {
+    if (!seSuperpone(a, periodo, fin)) continue;
+    const f = fila(a.paciente_id, a.dia_semana);
+    f.agendas.push(a); f.horas.add(horaCorta(a.hora));
+  }
+  for (const s of sesiones) {
+    const f = fila(s.paciente_id, diaSemana(s.fecha_prevista));
+    if (!f.agendas.length && s.hora) f.horas.add(horaCorta(s.hora));
+  }
+  const lista = [...filas.values()].filter((f) => f.p)
+    .sort((a, b) => a.dia - b.dia || ([...a.horas][0] || '99').localeCompare([...b.horas][0] || '99') || a.p.nombre.localeCompare(b.p.nombre));
 
   const r = resumenMes(sesiones, mesDe(periodo), paramDe(anioDe(periodo)));
 
@@ -29,15 +43,15 @@ export async function render(root, ctx) {
         ${periodo !== periodoDe(hoy) ? '<button class="btn btn-chico" data-hoy>Hoy</button>' : ''}
       </div>
       <div class="chips">
-        <span class="chip"><b>${r.sesionesCobradas}</b> sesiones cobradas</span>
+        <span class="chip"><b>${r.sesionesCobradas}</b> consultas cobradas</span>
         <span class="chip">Bruto <b>${pesos(r.bruto)}</b></span>
         <span class="chip chip-fuerte">Neto <b>${pesos(r.neto)}</b></span>
         <a class="chip chip-link" href="#/reportes">Ver reporte ›</a>
       </div>
     </header>`;
 
-  if (!pacientes.length) {
-    html += `<div class="vacio"><p>No hay pacientes activos en este mes.</p><a class="btn btn-primario" href="#/pacientes">Agregar pacientes</a></div>`;
+  if (!lista.length) {
+    html += `<div class="vacio"><p>No hay pacientes agendados en ${nombreMes(periodo).toLowerCase()}.</p><a class="btn btn-primario" href="#/pacientes">Agendar pacientes</a></div>`;
     root.innerHTML = html;
     enlazarNav(root, ctx);
     return;
@@ -49,35 +63,42 @@ export async function render(root, ctx) {
       ${[1, 2, 3, 4, 5].map((n) => `<div class="g-celda-cab" role="columnheader">${n}<sup>a</sup></div>`).join('')}
     </div>`;
 
+  const celdas = new Map(); // id de celda -> datos
   let diaActual = null;
-  for (const p of pacientes) {
-    if (p.dia_semana !== diaActual) {
-      diaActual = p.dia_semana;
+  lista.forEach((f, i) => {
+    if (f.dia !== diaActual) {
+      diaActual = f.dia;
       html += `<div class="g-grupo" role="row"><span role="rowheader">${DIAS[diaActual - 1]}</span></div>`;
     }
-    const baja = p.fecha_baja && p.fecha_baja < periodo;
+    const horas = [...f.horas].sort();
+    const sinAgendaFutura = !f.agendas.some((a) => !a.hasta || a.hasta >= fin);
     html += `<div class="g-fila" role="row">
       <div class="g-pac" role="rowheader">
-        <span class="g-nombre">${esc(p.nombre)}</span>
-        <span class="g-meta">${p.hora ? horaCorta(p.hora) : '<span class="falta-dato">sin hora</span>'}${p.tarifa != null ? ` · ${pesos(p.tarifa)}` : ''}${baja ? ' · de baja' : ''}</span>
+        <span class="g-nombre">${esc(f.p.nombre)}</span>
+        <span class="g-meta">${horas.join(' / ') || '—'}${f.p.tarifa != null ? ` · ${pesos(f.p.tarifa)}` : ''}${sinAgendaFutura && f.agendas.length ? ' · termina' : ''}</span>
       </div>`;
     for (let n = 1; n <= 5; n++) {
-      const fecha = fechaSemana(periodo, p.dia_semana, n);
-      const s = porClave.get(`${p.id}|${n}`);
-      if (!fecha && !s) { html += `<div class="g-celda g-nula" role="gridcell" aria-label="No hay ${n}ª semana"></div>`; continue; }
-      const dia = fecha ? parseISO(fecha).d : '';
-      const mov = reprogramada(s, p);
-      const futura = fecha && fecha > hoy;
+      const fecha = fechaSemana(periodo, f.dia, n);
+      const s = fecha ? porClave.get(`${f.p.id}|${fecha}`) : null;
+      const agenda = fecha ? f.agendas.find((a) => tocaEn(a, fecha)) : null;
+      if (!fecha || (!s && !agenda)) {
+        html += `<div class="g-celda g-nula" role="gridcell" aria-label="Sin consulta"></div>`;
+        continue;
+      }
+      const id = `${i}-${n}`;
+      const horaPrev = agenda ? agenda.hora : s?.hora;
+      celdas.set(id, { p: f.p, fecha, hora: horaPrev, s });
+      const mov = reprogramada(s, horaPrev);
       const etiqueta = s ? `${ESTADOS[s.estado].corto}${mov ? ', reprogramada' : ''}` : 'Sin marcar';
-      html += `<button class="g-celda ${s ? 'est-' + s.estado : ''} ${futura && !s ? 'futura' : ''} ${fecha === hoy ? 'es-hoy' : ''}"
-          role="gridcell" data-pid="${p.id}" data-sem="${n}" aria-label="${esc(p.nombre)}, ${n}ª semana, día ${dia}: ${etiqueta}">
-          <span class="g-dia">${dia}</span>
+      html += `<button class="g-celda ${s ? 'est-' + s.estado : ''} ${fecha > hoy && !s ? 'futura' : ''} ${fecha === hoy ? 'es-hoy' : ''}"
+          role="gridcell" data-celda="${id}" aria-label="${esc(f.p.nombre)}, ${n}ª semana, día ${parseISO(fecha).d}: ${etiqueta}">
+          <span class="g-dia">${parseISO(fecha).d}</span>
           <span class="g-marca">${s ? MARCA[s.estado] : ''}</span>
           ${mov ? '<span class="g-mov" title="Reprogramada">↻</span>' : ''}
         </button>`;
     }
     html += '</div>';
-  }
+  });
   html += `</div>
     <p class="leyenda">
       <span><i class="lg est-asistio">✓</i> Asistió</span>
@@ -85,29 +106,25 @@ export async function render(root, ctx) {
       <span><i class="lg est-cancelada_con_aviso">C</i> Canceló con aviso</span>
       <span>↻ Reprogramada</span>
     </p>
-    <p class="ayuda centro">Tocá una casilla vacía para marcar asistencia. Tocá una marcada para cambiarla, reprogramar o quitarla.</p>`;
+    <p class="ayuda centro">Tocá una casilla vacía para marcar asistencia. Tocá una marcada para cambiarla, reprogramarla o cancelar desde ahí en adelante.</p>`;
 
   root.innerHTML = html;
   enlazarNav(root, ctx);
 
   root.querySelector('.grilla').addEventListener('click', async (e) => {
-    const b = e.target.closest('button.g-celda');
+    const b = e.target.closest('button[data-celda]');
     if (!b) return;
-    const p = state.pacientes.find((x) => x.id === b.dataset.pid);
-    const semana = Number(b.dataset.sem);
-    const s = porClave.get(`${p.id}|${semana}`);
-    if (s) {
-      abrirSesion({ paciente: p, periodo, semana, sesion: s, onCambio: () => ctx.refrescar() });
+    const c = celdas.get(b.dataset.celda);
+    if (c.s) {
+      abrirSesion({ paciente: c.p, fechaPrevista: c.fecha, hora: c.hora, sesion: c.s, onCambio: () => ctx.refrescar() });
       return;
     }
-    // Marcado rápido de asistencia
     b.classList.add('est-asistio');
     b.querySelector('.g-marca').textContent = '✓';
     b.disabled = true;
     try {
-      const nueva = await alternarEstado(p, periodo, semana, 'asistio', null);
-      porClave.set(`${p.id}|${semana}`, nueva);
-      toast(`${p.nombre}: asistió`);
+      c.s = await alternarEstado(c.p, c.fecha, c.hora, 'asistio', null);
+      toast(`${c.p.nombre}: asistió`);
       ctx.refrescar();
     } catch {
       b.classList.remove('est-asistio'); b.querySelector('.g-marca').textContent = '';

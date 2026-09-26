@@ -1,7 +1,7 @@
 -- =====================================================================
 --  Control de Consultas e Ingresos — estructura de la base de datos
 --  Pegar completo en Supabase → SQL Editor → New query → Run
---  Se puede ejecutar más de una vez sin romper nada.
+--  Se puede ejecutar más de una vez sin borrar datos.
 -- =====================================================================
 
 -- ---------- Miembros autorizados (solo estos emails ven los datos) ----------
@@ -24,19 +24,38 @@ as $$
   );
 $$;
 
--- ---------- Pacientes ----------
+-- ---------- Pacientes (ficha permanente: se recuerda aunque deje de venir) ----------
 create table if not exists public.pacientes (
   id          uuid primary key default gen_random_uuid(),
   nombre      text not null,
-  dia_semana  smallint not null check (dia_semana between 1 and 7), -- 1 = lunes … 7 = domingo
-  hora        time,                                                  -- hora habitual
-  tarifa      numeric(12,2),                                         -- null = usa la tarifa general del mes
-  fecha_alta  date not null default current_date,
-  fecha_baja  date,                                                  -- null = activo
+  tarifa      numeric(12,2),          -- null = usa la tarifa general del mes
   notas       text,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+
+-- ---------- Horarios fijos del consultorio ----------
+create table if not exists public.horarios (
+  id          uuid primary key default gen_random_uuid(),
+  dia_semana  smallint not null check (dia_semana between 1 and 7),  -- 1 = lunes … 7 = domingo
+  hora        time not null,
+  created_at  timestamptz not null default now(),
+  unique (dia_semana, hora)
+);
+
+-- ---------- Agendas: en qué día y hora viene cada paciente, y desde/hasta cuándo ----------
+create table if not exists public.agendas (
+  id          uuid primary key default gen_random_uuid(),
+  paciente_id uuid not null references public.pacientes(id) on delete cascade,
+  dia_semana  smallint not null check (dia_semana between 1 and 7),
+  hora        time not null,
+  desde       date not null,
+  hasta       date,                   -- null = sin fecha de fin
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  check (hasta is null or hasta >= desde)
+);
+create index if not exists agendas_paciente_idx on public.agendas (paciente_id);
 
 -- ---------- Parámetros de cada mes ----------
 create table if not exists public.meses (
@@ -48,25 +67,35 @@ create table if not exists public.meses (
   updated_at      timestamptz not null default now()
 );
 
--- ---------- Sesiones (cada casilla de la grilla) ----------
+-- ---------- Sesiones (cada consulta marcada) ----------
 create table if not exists public.sesiones (
-  id           uuid primary key default gen_random_uuid(),
-  paciente_id  uuid not null references public.pacientes(id) on delete cascade,
-  periodo      date not null check (extract(day from periodo) = 1),
-  semana       smallint not null check (semana between 1 and 5),
-  fecha        date not null,
-  hora         time,
-  estado       text not null default 'asistio'
-               check (estado in ('asistio', 'falta_sin_aviso', 'cancelada_con_aviso')),
-  monto        numeric(12,2) not null default 0,  -- tarifa aplicada a esta sesión
-  notas        text,
-  updated_by   text default (auth.jwt() ->> 'email'),
-  created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now(),
-  unique (paciente_id, periodo, semana)
+  id              uuid primary key default gen_random_uuid(),
+  paciente_id     uuid not null references public.pacientes(id) on delete cascade,
+  fecha_prevista  date not null,        -- día que correspondía según su agenda
+  periodo         date not null,        -- mes al que cuenta (se completa solo)
+  fecha           date not null,        -- día real (distinto si se reprogramó)
+  hora            time,
+  estado          text not null default 'asistio'
+                  check (estado in ('asistio', 'falta_sin_aviso', 'cancelada_con_aviso')),
+  monto           numeric(12,2) not null default 0,  -- tarifa aplicada a esta sesión
+  notas           text,
+  updated_by      text default (auth.jwt() ->> 'email'),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (paciente_id, fecha_prevista)
 );
 create index if not exists sesiones_periodo_idx on public.sesiones (periodo);
 create index if not exists sesiones_fecha_idx   on public.sesiones (fecha);
+
+create or replace function public.sesion_periodo()
+returns trigger language plpgsql as $$
+begin
+  new.periodo := date_trunc('month', new.fecha_prevista)::date;
+  return new;
+end $$;
+drop trigger if exists trg_periodo on public.sesiones;
+create trigger trg_periodo before insert or update on public.sesiones
+  for each row execute function public.sesion_periodo();
 
 -- ---------- Parámetros impositivos por año ----------
 create table if not exists public.parametros (
@@ -87,7 +116,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['pacientes','meses','sesiones','parametros'] loop
+  foreach t in array array['pacientes','agendas','meses','sesiones','parametros'] loop
     execute format('drop trigger if exists trg_updated_at on public.%I', t);
     execute format('create trigger trg_updated_at before update on public.%I
                     for each row execute function public.tocar_updated_at()', t);
@@ -95,16 +124,11 @@ begin
 end $$;
 
 -- ---------- Seguridad: solo miembros ----------
-alter table public.miembros   enable row level security;
-alter table public.pacientes  enable row level security;
-alter table public.meses      enable row level security;
-alter table public.sesiones   enable row level security;
-alter table public.parametros enable row level security;
-
 do $$
 declare t text;
 begin
-  foreach t in array array['miembros','pacientes','meses','sesiones','parametros'] loop
+  foreach t in array array['miembros','pacientes','horarios','agendas','meses','sesiones','parametros'] loop
+    execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "solo miembros" on public.%I', t);
     execute format('create policy "solo miembros" on public.%I
                     for all to authenticated
@@ -116,7 +140,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['pacientes','meses','sesiones','parametros','miembros'] loop
+  foreach t in array array['pacientes','horarios','agendas','meses','sesiones','parametros','miembros'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
