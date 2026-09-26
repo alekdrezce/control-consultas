@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "Control de Consultas",
+  "short_name": "Consultas",
+  "description": "Consultas, agenda e ingresos del consultorio",
+  "lang": "es",
+  "start_url": "./#/agenda",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#7e4dff",
+  "icons": [
+    { "src": "img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Agenda de la semana", "short_name": "Agenda", "url": "./#/agenda", "icons": [{ "src": "img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Control del mes", "short_name": "Mes", "url": "./#/mes", "icons": [{ "src": "img/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Reportes", "short_name": "Reportes", "url": "./#/reportes", "icons": [{ "src": "img/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
